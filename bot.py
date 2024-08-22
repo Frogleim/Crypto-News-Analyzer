@@ -99,6 +99,7 @@ def send_signal(update: Update, context: CallbackContext):
     # Fetch recent BTCUSDT news
     while True:
         news_df = fetch_crypto_news()
+
         news_df['cleaned_description'] = news_df['description'].apply(lambda x: preprocess_text(x) if pd.notnull(x) else '')
         news_df['sentiment'] = news_df['cleaned_description'].apply(analyze_sentiment)
         sentiment_summary = get_sentiment_summary(news_df)
