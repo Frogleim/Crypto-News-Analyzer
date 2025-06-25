@@ -13,17 +13,17 @@ except AttributeError:
 else:
     ssl._create_default_https_context = _create_unverified_https_context
 
+# Now download
+
 # Replace 'your_api_key_here' with your actual NewsAPI key
 api_key = 'f5fe5390fbb64c64883b26acdcadc8dc'
 base_url = 'https://newsapi.org/v2/everything'
 nltk.download('stopwords')
+# SDX500-USD, NDXUSD, BTCUSDT, ETHUSDT
 
-
-def fetch_crypto_news(query='BTCUSDT OR Bitcoin AND USDT', from_date=None, to_date=None, language='en'):
-    if not from_date:
-        from_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    if not to_date:
-        to_date = datetime.now().strftime('%Y-%m-%d')
+def fetch_crypto_news(query='S&P500', from_date=None, to_date=None, language='en'):
+    from_date = '2025-06-23'
+    to_date = '2025-06-24'
 
     params = {
         'q': query,
