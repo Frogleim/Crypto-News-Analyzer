@@ -1,5 +1,5 @@
 import time
-
+import threading
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -8,9 +8,9 @@ from nltk.corpus import stopwords
 import ssl
 from textblob import TextBlob
 from telegram.ext import Updater, CommandHandler, CallbackContext
-from telegram import Update
+from telegram import Update, Bot
 
-# Setting up SSL context
+# SSL fix for nltk downloads
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
@@ -18,15 +18,18 @@ except AttributeError:
 else:
     ssl._create_default_https_context = _create_unverified_https_context
 
-# Download stopwords
+# Download NLTK stopwords
 nltk.download('stopwords')
 
-# Replace 'your_api_key_here' with your actual NewsAPI key
-api_key = 'f5fe5390fbb64c64883b26acdcadc8dc'
+# News API setup
+api_key = ''
 base_url = 'https://newsapi.org/v2/everything'
 
-# Replace 'your_telegram_token_here' with your actual Telegram bot token
-telegram_token = '7247839345:AAF1YTg3ZTio4n3vQlzgKCn0FexkpneHppI'
+# Telegram Bot Token
+telegram_token = ''
+
+# Replace with your Telegram channel username (public) or chat ID (private)
+channel_id = ''  # or '-1001234567890' for private channels
 
 
 def fetch_crypto_news(query='BTCUSDT OR Bitcoin AND USDT', from_date=None, to_date=None, language='en'):
@@ -54,71 +57,97 @@ def fetch_crypto_news(query='BTCUSDT OR Bitcoin AND USDT', from_date=None, to_da
 
 
 def preprocess_text(text):
-    # Convert to lowercase
     text = text.lower()
-    # Remove special characters, numbers, etc.
     text = ''.join([c for c in text if c.isalpha() or c.isspace()])
-    # Tokenize text
     tokens = text.split()
-    # Remove stopwords
     tokens = [word for word in tokens if word not in stopwords.words('english')]
-    # Join tokens back to string
     return ' '.join(tokens)
 
 
 def analyze_sentiment(text):
-    # Create a TextBlob object and get the polarity
     return TextBlob(text).sentiment.polarity
 
 
 def get_sentiment_summary(df):
     average_sentiment = df['sentiment'].mean()
-    positive_articles = df[df['sentiment'] > 0].shape[0]
-    negative_articles = df[df['sentiment'] < 0].shape[0]
-    neutral_articles = df[df['sentiment'] == 0].shape[0]
-
     return {
         'average_sentiment': average_sentiment,
-        'positive_articles': positive_articles,
-        'negative_articles': negative_articles,
-        'neutral_articles': neutral_articles,
+        'positive_articles': df[df['sentiment'] > 0].shape[0],
+        'negative_articles': df[df['sentiment'] < 0].shape[0],
+        'neutral_articles': df[df['sentiment'] == 0].shape[0],
     }
 
 
-def generate_trading_signal(sentiment_summary):
-    if sentiment_summary['average_sentiment'] > 0.1:
+def generate_trading_signal(summary):
+    if summary['average_sentiment'] > 0.1:
         return "BUY"
-    elif sentiment_summary['average_sentiment'] < -0.1:
+    elif summary['average_sentiment'] < -0.1:
         return "SELL"
     else:
         return "HOLD"
 
 
-# Function to send the trading signal via Telegram
-def send_signal(update: Update, context: CallbackContext):
-    # Fetch recent BTCUSDT news
+def send_signal_to_channel(bot: Bot):
+    news_df = fetch_crypto_news()
+
+    news_df['cleaned_description'] = news_df['description'].apply(lambda x: preprocess_text(x) if pd.notnull(x) else '')
+    news_df['sentiment'] = news_df['cleaned_description'].apply(analyze_sentiment)
+    summary = get_sentiment_summary(news_df)
+    signal = generate_trading_signal(summary)
+
+    # Find highly impactful articles
+    impact_threshold = 0.5  # You can tune this
+    impactful_articles = news_df[abs(news_df['sentiment']) >= impact_threshold]
+
+    top_news_lines = []
+    for _, row in impactful_articles.iterrows():
+        polarity = row['sentiment']
+        title = row['title'] or "No title"
+        url = row['url'] or ""
+        emoji = "🟢" if polarity > 0 else "🔴"
+        line = f"{emoji} *{title.strip()}*\n[Read more]({url}) — Sentiment: {polarity:.2f}"
+        top_news_lines.append(line)
+
+    top_news_section = "\n\n🔥 *High-Impact News Detected:*\n" + "\n\n".join(top_news_lines) if top_news_lines else ""
+
+    message = (
+        f"📊 *BTCUSDT Trading Signal*\n"
+        f"Signal: *{signal}*\n"
+        f"Sentiment Score: {summary['average_sentiment']:.2f}\n"
+        f"🟢 Positive: {summary['positive_articles']} | 🔴 Negative: {summary['negative_articles']} | ⚪ Neutral: {summary['neutral_articles']}\n"
+        f"{top_news_section}"
+    )
+
+    bot.send_message(chat_id=channel_id, text=message, parse_mode="Markdown", disable_web_page_preview=False)
+
+
+
+# Optional: /signal command for private use
+def signal_command(update: Update, context: CallbackContext):
+    send_signal_to_channel(context.bot)
+
+
+def run_scheduled_signals(bot: Bot):
+    send_signal_to_channel(bot)
+
     while True:
-        news_df = fetch_crypto_news()
+        try:
+            send_signal_to_channel(bot)
+        except Exception as e:
+            print(f"Error sending scheduled signal: {e}")
+        time.sleep(3600)  # every 1 hour
+    #
 
-        news_df['cleaned_description'] = news_df['description'].apply(lambda x: preprocess_text(x) if pd.notnull(x) else '')
-        news_df['sentiment'] = news_df['cleaned_description'].apply(analyze_sentiment)
-        sentiment_summary = get_sentiment_summary(news_df)
-        trading_signal = generate_trading_signal(sentiment_summary)
-
-        # Send the signal to the Telegram chat
-        update.message.reply_text(f"Trading Signal BTC: {trading_signal}")
-        time.sleep(3600)
-
-# Main function to set up the Telegram bot
 def main():
-    # Set up the updater and dispatcher
     updater = Updater(telegram_token)
-    dp = updater.dispatcher
+    bot = updater.bot
 
-    # Add command handler to send signal when /signal command is issued
-    dp.add_handler(CommandHandler("signal", send_signal))
+    # Start scheduled job in background
+    threading.Thread(target=run_scheduled_signals, args=(bot,), daemon=True).start()
 
-    # Start the bot
+    # Handle /signal command in private chat (optional)
+    updater.dispatcher.add_handler(CommandHandler("signal", signal_command))
+
     updater.start_polling()
     updater.idle()
 
